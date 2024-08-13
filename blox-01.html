@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Canvas Boxes</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        canvas {
+            display: block;
+        }
+        .color-picker {
+            position: absolute;
+            background: white;
+            border: 1px solid #ccc;
+            padding: 5px;
+            display: none;
+        }
+        .color-option {
+            width: 20px;
+            height: 20px;
+            display: inline-block;
+            margin: 2px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="colorPicker" class="color-picker"></div>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+
+        let boxes = [];
+        let isDrawing = false;
+        let startX, startY;
+        let draggedBox = null;
+        let isEditing = false;
+        let editingBox = null;
+        let isResizing = false;
+        let activeBox = null;
+
+        const GRID_SIZE = 20;
+        const HEADER_HEIGHT = 25;
+        const COLORS = [
+            '#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
+            '#FF00FF', '#00FFFF', '#800000', '#008000', '#000080',
+            '#808000', '#800080', '#008080', '#C0C0C0', '#808080',
+            '#9999FF', '#993366', '#FFFFCC', '#CCFFFF', '#660066'
+        ];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            drawGrid();
+            drawBoxes();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Box {
+            constructor(x, y, width, height, content = '', title = 'Untitled', color = '#000000') {
+                this.x = Math.round(x / GRID_SIZE) * GRID_SIZE;
+                this.y = Math.round(y / GRID_SIZE) * GRID_SIZE;
+                this.width = Math.max(GRID_SIZE * 2, Math.round(width / GRID_SIZE) * GRID_SIZE);
+                this.height = Math.max(GRID_SIZE * 2, Math.round(height / GRID_SIZE) * GRID_SIZE);
+                this.content = content;
+                this.title = title;
+                this.color = color;
+            }
+
+            draw() {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(this.x, this.y, this.width, this.height);
+                
+                // Header
+                ctx.fillStyle = 'rgba(240, 240, 240, 0.9)';
+                ctx.fillRect(this.x, this.y, this.width, HEADER_HEIGHT);
+                ctx.strokeRect(this.x, this.y, this.width, HEADER_HEIGHT);
+                
+                // Drag handle
+                ctx.fillStyle = this.color;
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillRect(this.x + 5, this.y + 7 + i * 5, 15, 2);
+                }
+                
+                // Color picker button
+                ctx.beginPath();
+                ctx.arc(this.x + this.width - 12, this.y + HEADER_HEIGHT / 2, 3, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Title
+                ctx.fillStyle = this.color;
+                ctx.font = '14px "Courier New", monospace';
+                ctx.fillText(this.title, this.x + 30, this.y + 18);
+                
+                // Content
+                ctx.font = '16px "Courier New", monospace';
+                const lines = this.content.split('\n');
+                lines.forEach((line, index) => {
+                    ctx.fillText(line, this.x + 5, this.y + HEADER_HEIGHT + 20 + index * 20);
+                });
+                
+                // Resize handle
+                ctx.beginPath();
+                ctx.moveTo(this.x + this.width, this.y + this.height);
+                ctx.lineTo(this.x + this.width - 10, this.y + this.height);
+                ctx.lineTo(this.x + this.width, this.y + this.height - 10);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            isInside(x, y) {
+                return x > this.x && x < this.x + this.width &&
+                       y > this.y && y < this.y + this.height;
+            }
+
+            isOnDragHandle(x, y) {
+                return x > this.x && x < this.x + 25 &&
+                       y > this.y && y < this.y + HEADER_HEIGHT;
+            }
+
+            isOnColorPicker(x, y) {
+                return x > this.x + this.width - 25 && x < this.x + this.width &&
+                       y > this.y && y < this.y + HEADER_HEIGHT;
+            }
+
+            isOnResizeHandle(x, y) {
+                return x > this.x + this.width - 10 && x < this.x + this.width &&
+                       y > this.y + this.height - 10 && y < this.y + this.height;
+            }
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(0, 0, 255, 0.03)';
+            ctx.lineWidth = 1;
+
+            for (let x = 0; x <= canvas.width; x += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+
+            for (let y = 0; y <= canvas.height; y += GRID_SIZE) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        function drawBoxes() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGrid();
+            boxes.forEach(box => box.draw());
+        }
+
+        function saveBoxes() {
+            localStorage.setItem('boxes', JSON.stringify(boxes));
+        }
+
+        function loadBoxes() {
+            const savedBoxes = localStorage.getItem('boxes');
+            if (savedBoxes) {
+                boxes = JSON.parse(savedBoxes).map(box => 
+                    new Box(box.x, box.y, box.width, box.height, box.content, box.title, box.color)
+                );
+                drawBoxes();
+            }
+        }
+
+        function showColorPicker(box, x, y) {
+            colorPicker.innerHTML = '';
+            colorPicker.style.display = 'block';
+            colorPicker.style.left = `${x}px`;
+            colorPicker.style.top = `${y}px`;
+
+            COLORS.forEach(color => {
+                const colorOption = document.createElement('div');
+                colorOption.className = 'color-option';
+                colorOption.style.backgroundColor = color;
+                colorOption.addEventListener('click', () => {
+                    box.color = color;
+                    colorPicker.style.display = 'none';
+                    saveBoxes();
+                    drawBoxes();
+                });
+                colorPicker.appendChild(colorOption);
+            });
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            for (let i = boxes.length - 1; i >= 0; i--) {
+                if (boxes[i].isOnResizeHandle(x, y)) {
+                    isResizing = true;
+                    activeBox = boxes[i];
+                    return;
+                }
+                if (boxes[i].isOnDragHandle(x, y)) {
+                    draggedBox = boxes[i];
+                    return;
+                }
+                if (boxes[i].isOnColorPicker(x, y)) {
+                    showColorPicker(boxes[i], e.clientX, e.clientY);
+                    return;
+                }
+                if (boxes[i].isInside(x, y)) {
+                    activeBox = boxes[i];
+                    return;
+                }
+            }
+
+            isDrawing = true;
+            startX = x;
+            startY = y;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (isDrawing) {
+                drawBoxes();
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.strokeRect(startX, startY, x - startX, y - startY);
+            } else if (draggedBox) {
+                let newX = Math.round((x - draggedBox.width / 2) / GRID_SIZE) * GRID_SIZE;
+                let newY = Math.round((y - HEADER_HEIGHT / 2) / GRID_SIZE) * GRID_SIZE;
+
+                newX = Math.max(0, Math.min(newX, canvas.width - draggedBox.width));
+                newY = Math.max(0, Math.min(newY, canvas.height - draggedBox.height));
+
+                draggedBox.x = newX;
+                draggedBox.y = newY;
+                drawBoxes();
+            } else if (isResizing && activeBox) {
+                let newWidth = Math.max(GRID_SIZE * 2, Math.round((x - activeBox.x) / GRID_SIZE) * GRID_SIZE);
+                let newHeight = Math.max(GRID_SIZE * 2, Math.round((y - activeBox.y) / GRID_SIZE) * GRID_SIZE);
+
+                newWidth = Math.min(newWidth, canvas.width - activeBox.x);
+                newHeight = Math.min(newHeight, canvas.height - activeBox.y);
+
+                activeBox.width = newWidth;
+                activeBox.height = newHeight;
+                drawBoxes();
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (isDrawing) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const width = Math.abs(x - startX);
+                const height = Math.abs(y - startY);
+
+                if (width > GRID_SIZE && height > GRID_SIZE) {
+                    const newBox = new Box(
+                        Math.min(startX, x),
+                        Math.min(startY, y),
+                        width,
+                        height
+                    );
+                    boxes.push(newBox);
+                    saveBoxes();
+                    drawBoxes();
+                }
+            } else if (draggedBox || isResizing) {
+                saveBoxes();
+            }
+
+            isDrawing = false;
+            draggedBox = null;
+            isResizing = false;
+            activeBox = null;
+        });
+
+        canvas.addEventListener('dblclick', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            for (let i = boxes.length - 1; i >= 0; i--) {
+                if (boxes[i].isInside(x, y)) {
+                    isEditing = true;
+                    editingBox = boxes[i];
+                    const isTitle = y < editingBox.y + HEADER_HEIGHT;
+                    const input = document.createElement('textarea');
+                    input.value = isTitle ? editingBox.title : editingBox.content;
+                    input.style.position = 'absolute';
+                    input.style.left = `${editingBox.x + rect.left + (isTitle ? 30 : 0)}px`;
+                    input.style.top = `${editingBox.y + rect.top + (isTitle ? 0 : HEADER_HEIGHT)}px`;
+                    input.style.width = `${editingBox.width - (isTitle ? 60 : 0)}px`;
+                    input.style.height = isTitle ? `${HEADER_HEIGHT}px` : `${editingBox.height - HEADER_HEIGHT}px`;
+                    input.style.font = isTitle ? '14px "Courier New", monospace' : '16px "Courier New", monospace';
+                    input.style.resize = 'none';
+
+                    input.addEventListener('blur', () => {
+                        if (isTitle) {
+                            editingBox.title = input.value;
+                        } else {
+                            editingBox.content = input.value;
+                        }
+                        document.body.removeChild(input);
+                        isEditing = false;
+                        editingBox = null;
+                        saveBoxes();
+                        drawBoxes();
+                    });
+
+                    document.body.appendChild(input);
+                    input.focus();
+                    break;
+                }
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (e.target !== colorPicker && !colorPicker.contains(e.target)) {
+                colorPicker.style.display = 'none';
+            }
+        });
+
+        loadBoxes();
+    </script>
+</body>
+</html>
